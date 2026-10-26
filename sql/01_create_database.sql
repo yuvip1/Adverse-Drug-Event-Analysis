@@ -25,35 +25,37 @@ GO
 
 IF OBJECT_ID('stg.reactions', 'U') IS NULL
 CREATE TABLE stg.reactions (
-    safetyreportid     VARCHAR(20)  NOT NULL,
+    reaction_row_id     INT          NOT NULL IDENTITY(1,1),
+    safetyreportid      VARCHAR(20)  NOT NULL,
     safetyreportversion VARCHAR(10)  NOT NULL,
-    reactionmeddrapt    VARCHAR(255),
+    reactionmeddrapt    VARCHAR(255) NULL,
     reactionmeddraversionpt VARCHAR(20),
     reactionoutcome     VARCHAR(10),
     batch_id            INT          NOT NULL,
     loaded_at           DATETIME2    NOT NULL DEFAULT SYSDATETIME(),
-    CONSTRAINT pk_stg_reactions PRIMARY KEY (safetyreportid, safetyreportversion, reactionmeddrapt)
+    CONSTRAINT pk_stg_reactions PRIMARY KEY (reaction_row_id)
 );
 GO
 
 IF OBJECT_ID('stg.drugs', 'U') IS NULL
 CREATE TABLE stg.drugs (
+    drug_row_id             INT          NOT NULL IDENTITY(1,1),
     safetyreportid          VARCHAR(20)  NOT NULL,
     safetyreportversion     VARCHAR(10)  NOT NULL,
-    medicinalproduct        VARCHAR(512),
+    medicinalproduct        VARCHAR(512) NULL,
     drugcharacterization    VARCHAR(10),
     drugauthorizationnumb    VARCHAR(50),
     drugseparatedosagenumb   VARCHAR(50),
     drugdosageform          VARCHAR(255),
     drugadministrationroute VARCHAR(50),
     drugindication          VARCHAR(512),
-    activesubstancename     VARCHAR(512),
+    activesubstancename     VARCHAR(512) NULL,
     openfda_brand_name      VARCHAR(255),
     openfda_generic_name    VARCHAR(512),
     openfda_manufacturer_name VARCHAR(255),
     batch_id                INT          NOT NULL,
     loaded_at               DATETIME2    NOT NULL DEFAULT SYSDATETIME(),
-    CONSTRAINT pk_stg_drugs PRIMARY KEY (safetyreportid, safetyreportversion, medicinalproduct, activesubstancename)
+    CONSTRAINT pk_stg_drugs PRIMARY KEY (drug_row_id)
 );
 GO
 
