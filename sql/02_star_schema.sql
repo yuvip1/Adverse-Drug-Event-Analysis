@@ -7,6 +7,17 @@ USE faers;
 GO
 
 -- ------------------------------------------------------------
+-- RESET EXISTING STAR SCHEMA
+-- Facts must be dropped before dimensions because their foreign keys
+-- reference the dimension tables.
+-- ------------------------------------------------------------
+
+IF OBJECT_ID('dbo.fact_reaction', 'U') IS NOT NULL DROP TABLE dbo.fact_reaction;
+IF OBJECT_ID('dbo.fact_drug', 'U') IS NOT NULL DROP TABLE dbo.fact_drug;
+IF OBJECT_ID('dbo.fact_report', 'U') IS NOT NULL DROP TABLE dbo.fact_report;
+GO
+
+-- ------------------------------------------------------------
 -- DIMENSIONS
 -- ------------------------------------------------------------
 
@@ -86,7 +97,6 @@ GO
 -- FACTS
 -- ------------------------------------------------------------
 
-IF OBJECT_ID('dbo.fact_report', 'U') IS NOT NULL DROP TABLE dbo.fact_report;
 CREATE TABLE dbo.fact_report (
     report_key      INT IDENTITY(1,1) PRIMARY KEY,
     safetyreportid  VARCHAR(20)   NOT NULL,
@@ -117,7 +127,6 @@ CREATE TABLE dbo.fact_report (
 );
 GO
 
-IF OBJECT_ID('dbo.fact_drug', 'U') IS NOT NULL DROP TABLE dbo.fact_drug;
 CREATE TABLE dbo.fact_drug (
     drug_key        INT IDENTITY(1,1) PRIMARY KEY,
     safetyreportid  VARCHAR(20)   NOT NULL,
@@ -133,7 +142,6 @@ CREATE TABLE dbo.fact_drug (
 );
 GO
 
-IF OBJECT_ID('dbo.fact_reaction', 'U') IS NOT NULL DROP TABLE dbo.fact_reaction;
 CREATE TABLE dbo.fact_reaction (
     reaction_key    INT IDENTITY(1,1) PRIMARY KEY,
     safetyreportid  VARCHAR(20)   NOT NULL,

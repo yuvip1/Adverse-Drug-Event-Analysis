@@ -1,0 +1,71 @@
+-- ============================================================
+-- powerbi/measures.dax
+-- Dedicated DAX Measures for FAERS Power BI Model
+-- Table: _Measures
+-- ============================================================
+
+-- 1. Volume & Counts
+Total Reports =
+COUNTROWS('fact_report')
+
+Total Serious Reports =
+CALCULATE(
+    COUNTROWS('fact_report'),
+    'fact_report'[is_serious] = 1
+)
+
+Total Non-Serious Reports =
+CALCULATE(
+    COUNTROWS('fact_report'),
+    'fact_report'[is_serious] = 0
+)
+
+Total Suspect Drug Records =
+CALCULATE(
+    COUNTROWS('fact_drug'),
+    'fact_drug'[is_suspect] = 1
+)
+
+Total Reactions =
+COUNTROWS('fact_reaction')
+
+-- 2. Rates & Percentages
+Serious Rate % =
+DIVIDE([Total Serious Reports], [Total Reports], 0) * 100
+
+Suspect Drug Share % =
+DIVIDE([Total Suspect Drug Records], COUNTROWS('fact_drug'), 0) * 100
+
+-- 3. Time Intelligence (YoY & MoM)
+Reports PY =
+CALCULATE(
+    [Total Reports],
+    SAMEPERIODLASTYEAR('dim_date'[full_date])
+)
+
+Reports YoY Growth % =
+DIVIDE(
+    [Total Reports] - [Reports PY],
+    [Reports PY],
+    0
+) * 100
+
+Serious Reports PY =
+CALCULATE(
+    [Total Serious Reports],
+    SAMEPERIODLASTYEAR('dim_date'[full_date])
+)
+
+Serious Rate YoY Delta % =
+[Serious Rate %] -
+CALCULATE(
+    [Serious Rate %],
+    SAMEPERIODLASTYEAR('dim_date'[full_date])
+)
+
+-- 4. Operational Excellence / Cycle Time Measures
+Avg Receive to Receipt Lag Days =
+AVERAGEX(
+    'fact_report',
+    RELATED('dim_date'[full_date]) // using receipt date via USERELATIONSHIP if active
+)
