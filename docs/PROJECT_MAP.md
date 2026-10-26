@@ -1,36 +1,72 @@
 # Project Map
 
 ## Overview
-FAERS-Adverse-Drug-Event-Analysis – a portfolio project demonstrating end‑to‑end data engineering, analytics, forecasting, ML, and a FastAPI‑Streamlit stack on a Windows environment with SQL Server.
 
-## Folder structure
-- `src/` – Python modules (initially a small environment‑check script).
-- `sql/` – DDL scripts for staging and star schema tables.
-- `tests/` – pytest unit and integration tests (yet to be implemented).
-- `docs/` – Project documentation, data dictionaries, quality metrics, and the project map.
-- `results/` – JSON metrics and output files.
-- `powerbi/` – Power BI build guide and DAX measures template.
-- `data/` – Raw & processed FAERS data files (ignored by git).
+This repository is an MVP FAERS analytics pipeline on Windows and SQL Server.
+Stages 0 through 7 are complete or prepared: ingestion, modeling, cleaning,
+SQL analysis, Power BI preparation, generated results documentation, signal
+screening, and rolling-origin forecasting. Later ML, API, Docker, and CI
+stages remain planned.
 
-## Environment status (verified 2026-10-26)
-- Python 3.14.7 – OK (>=3.11 required).
-- Virtual environment `.venv/` (Python 3.14.7) with deps: `pyodbc 5.3.0`, `SQLAlchemy 2.1.6`, `python-dotenv 1.2.4`, `pandas 3.1.0`, `numpy 2.5.4`, `pytest 9.1.1`, `ruff 0.17.2`, `ijson 3.6.0`.
-- ODBC Driver 18 for SQL Server – **INSTALLED** (visible to both 32‑bit and 64‑bit; confirmed by `pyodbc.drivers()`).
-- SQL Server 2025 Developer Edition – **RUNNING** as default instance `MSSQLSERVER` (service name `MSSQLSERVER`).
-  - `SERVERPROPERTY('Edition')` = `Standard Developer Edition (64-bit)`.
-  - Python → SQL Server probe: **OK** (see `sql/test_connection.py`).
-- Connection string in `.env`: `Driver={ODBC Driver 18 for SQL Server};Server=localhost;Database=faers;Trusted_Connection=yes;Encrypt=No`
-  - `Encrypt=No` is required because the local dev instance uses a self‑signed certificate.
-  - Docker mode (Linux container) uses SQL auth: `UID=sa;PWD=...;Encrypt=Yes;TrustServerCertificate=yes`.
-- Disk: ~190 GB free on C:.
+## Data flow
 
-## Data file
-- `C:/Users/yuvra/Downloads/drug-event-0001-of-0031.json.zip` (209.6 MB compressed → 1.04 GB raw)
-- Single file inside: `drug-event-0001-of-0031.json`
-- Streaming parse (`ijson`) counted **12,000 records** in this file.
-- `meta.results.total = 370,540` – this file is a **sample (first 12k of 370,540)**.
+```text
+FAERS ZIP
+  -> src/ingest.py
+  -> stg.reports / stg.drugs / stg.reactions
+  -> src/clean.py
+  -> src/transform.py
+  -> dbo.dim_* / dbo.fact_*
+  -> sql/03_views.sql
+  -> src/stats.py, pareto.py, cycle_time.py, trend.py, forecast.py
+  -> results/*.json
+  -> src/signal.py -> results/signals.json
+  -> src/build_metrics.py
+  -> results/metrics.json and docs/RESULTS.md
+  -> powerbi/data/*.csv -> Power BI Desktop
+```
 
-## Next steps
-1. Confirm scope: proceed with the 12k sample (default) or download the full 31‑part dataset.
-2. Create the `faers` database and staging/star‑schema DDL (Stage 1).
-3. Stream‑parse the JSON and bulk‑load into staging tables.
+## Important files
+
+- `src/ingest.py` – streams JSON from a ZIP and bulk-loads the staging tables.
+- `src/clean.py` – validates dates, cleans age/weight, removes older versions,
+  writes quarantine rows, and logs quality checks.
+- `src/transform.py` – creates dimensions and facts from staging data.
+- `src/stats.py` – writes summary counts to `results/stats.json`.
+- `src/pareto.py` – writes 80/20 tables to `results/pareto.json`.
+- `src/cycle_time.py` – writes date-lag metrics to `results/cycle_time.json`.
+- `src/trend.py` and `src/forecast.py` – write complete total/serious monthly
+  series and compare seasonal-naive, ETS, and SARIMA forecasts.
+- `src/signal.py` – calculates PRR, ROR, confidence intervals, and
+  Yates-corrected chi-square for screened drug-reaction pairs.
+- `src/export_powerbi.py` – exports SQL tables/views to `powerbi/data/`.
+- `src/build_metrics.py` – combines analytical JSON outputs into the
+  authoritative `results/metrics.json` and generated `docs/RESULTS.md`.
+- `sql/01_create_database.sql` – database and staging DDL.
+- `sql/02_star_schema.sql` – dimensions, facts, keys, and indexes.
+- `sql/03_views.sql` – Stage 3 analytical views.
+- `sql/04_signal_views.sql` – report-level suspect drug/reaction pair counts
+  for Stage 6.
+- `powerbi/BUILD_GUIDE.md` – manual Power BI Desktop construction guide.
+- `tests/` – reserved for the later automated test stage; no tests are currently
+  implemented.
+
+## Environment status
+
+Verified 2026-10-26:
+
+- Python 3.14.7 and the project virtual environment are available.
+- ODBC Driver 18 for SQL Server is installed.
+- SQL Server 2025 Developer Edition is running as the default instance.
+- Python-to-SQL Server connectivity was verified with `sql/test_connection.py`.
+
+## Dataset scope
+
+- Input: `C:\Users\yuvra\Downloads\drug-event-0001-of-0031.json.zip`
+- The ZIP contains one JSON file with 12,000 records.
+- `meta.results.total` reports 370,540 records in the complete source set.
+- Current results describe the 12,000-record sample, not all 31 files.
+
+## Current next steps
+
+1. Add the later ML, API, Streamlit, Docker, CI, and test stages.

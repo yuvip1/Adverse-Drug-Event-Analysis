@@ -6,3 +6,4 @@ numpy
 pytest
 ruff
 ijson
+statsmodels
