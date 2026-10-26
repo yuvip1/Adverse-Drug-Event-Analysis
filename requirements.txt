@@ -1,0 +1,8 @@
+pyodbc
+SQLAlchemy
+python-dotenv
+pandas
+numpy
+pytest
+ruff
+ijson

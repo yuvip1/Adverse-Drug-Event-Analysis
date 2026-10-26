@@ -1,0 +1,1 @@
+Get-Service | Where-Object { $_.Name -match 'sql' } | Select-Object Name, DisplayName, Status
