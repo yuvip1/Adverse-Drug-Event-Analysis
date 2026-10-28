@@ -177,7 +177,7 @@ def main() -> None:
     parser.add_argument("--min-pair-count", type=int, default=3)
     args = parser.parse_args()
     output = run(args.top_drugs, args.min_pair_count)
-    print(f"signal.py: {output['signal_count']} screened signals from {output['candidate_count']} candidates")
+    print(f"signal_analysis.py: {output['signal_count']} screened signals from {output['candidate_count']} candidates")
 
 
 if __name__ == "__main__":

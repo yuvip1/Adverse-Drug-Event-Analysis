@@ -11,7 +11,7 @@
 --   b = drug_total - a, c = reaction_total - a,
 --   d = n_total - drug_total - reaction_total + a
 --
--- PRR / ROR / chi-square are computed in src/signal.py because the
+-- PRR / ROR / chi-square are computed in src/signal_analysis.py because the
 -- confidence-interval and Yates-correction arithmetic is clearer in
 -- Python and keeps the view a pure aggregation.
 -- ============================================================

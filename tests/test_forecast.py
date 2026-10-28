@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.forecast import _metrics, _seasonal_naive
+from src.forecast import _forecast_series, _metrics, _seasonal_naive
 
 
 def test_metrics_calculate_mae_rmse_and_smape():
@@ -23,3 +23,14 @@ def test_seasonal_naive_repeats_previous_year():
 def test_seasonal_naive_requires_one_year():
     with pytest.raises(ValueError, match="12 observations"):
         _seasonal_naive(np.arange(11, dtype=float), 1)
+
+
+def test_forecast_series_supports_custom_horizon():
+    result = _forecast_series(
+        list(range(48)),
+        "total_reports",
+        "2023-12",
+        horizon=3,
+    )
+
+    assert len(result["forecast"]) == 3

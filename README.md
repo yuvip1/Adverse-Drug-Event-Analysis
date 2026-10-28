@@ -1,13 +1,13 @@
 # FAERS Adverse Drug Event Analysis
 
 An MVP pharmacovigilance data pipeline and analytical framework for FDA Adverse
-Event Reporting System (FAERS) data. The completed scope currently covers setup,
-streaming ingestion, SQL Server staging and star-schema modeling, cleaning and
-quality logging, SQL analysis, Pareto/cycle-time analysis, and a Power BI
-reporting package.
+Event Reporting System (FAERS) data. The completed scope currently covers
+setup, streaming ingestion, SQL Server staging and star-schema modeling,
+cleaning and quality logging, SQL analysis, signal screening, forecasting,
+seriousness classification, and interactive reporting.
 
-The repository currently processes one 12,000-report sample file. It does not
-yet implement the later ML, API, Docker, CI, or validated forecasting stages.
+The repository currently processes one 12,000-report sample file. API,
+authentication, Docker, CI, and deployment remain out of scope.
 
 ## Architecture
 
@@ -41,11 +41,40 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Run tests with the same activated environment:
+
+```powershell
+python -m pytest
+```
+
+If the virtual environment is not activated, use its interpreter explicitly:
+
+```powershell
+.venv\Scripts\python.exe -m pytest
+```
+
 Create `.env` in the project root:
 
 ```env
 SQLSERVER_CONNECTION="DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=faers;Trusted_Connection=yes;Encrypt=No"
 ```
+
+Start the Streamlit application from the repository root. Use the persistent
+sidebar to move between the reporting overview, signal explorer, forecasting,
+and seriousness classification pages:
+
+```powershell
+streamlit run app.py
+```
+
+The page calls `services.analytics_service.get_reporting_summary()` and
+`services.signal_service.explore_signals()`,
+`services.forecast_service.forecast_reporting_volume()`, and
+`services.classifier_service.classify_new_report()` and returns aggregate or
+inference-only results. It does not run ingestion, transformation, model
+training, batch signal generation, or write JSON artifacts. Classification
+uses the persisted `results/model/seriousness_classifier.joblib` artifact and
+does not write hypothetical reports to SQL Server.
 
 ## Pipeline
 
@@ -74,7 +103,8 @@ python src/pareto.py
 python src/cycle_time.py
 python src/trend.py
 python src/forecast.py
-python src/signal.py --top-drugs 100 --min-pair-count 3
+python src/signal_analysis.py --top-drugs 100 --min-pair-count 3
+python src/ml_classifier.py
 python src/export_powerbi.py
 python src/build_metrics.py
 ```
@@ -93,15 +123,21 @@ outputs rather than manually maintained figures.
 
 ## Current status and limitations
 
-Stages 0 through 6 are complete or prepared: setup, ingestion/modeling,
+Stages 0 through 8 plus the Phase 1 reporting service, Phase 2 reporting page,
+Phase 3 signal explorer, Phase 4 reporting-volume forecasting, and Phase 5
+seriousness classification are complete or prepared: setup, ingestion/modeling,
 cleaning and quality logging, SQL analysis, Power BI preparation, generated
-results documentation, and PRR/ROR signal screening. The current dataset is one 12,000-report
+results documentation, PRR/ROR signal screening, and seriousness classification
+with local MLflow tracking. The current dataset is one 12,000-report
 sample from a source set of 370,540 reports.
 
 The current forecast compares seasonal naive, ETS, and SARIMA using rolling-origin
 backtesting and produces 12-month prediction intervals. The latest observed
-month is excluded from training as potentially incomplete. ML, API, Streamlit,
-Docker, CI, and broader automated tests remain later roadmap work. FAERS is a
+month is excluded from training as potentially incomplete. Signal, forecast,
+classifier, reporting service, reporting page, signal explorer, forecasting
+page, and persisted-model classification page are implemented; API,
+authentication, Docker, CI, and deployment remain later roadmap work.
+FAERS is a
 spontaneous-reporting system, so report counts do not estimate incidence or
 causality. Manufacturer and dosage-form outputs are product/reporting quality
 analytics, not supply-chain or demand forecasts.
