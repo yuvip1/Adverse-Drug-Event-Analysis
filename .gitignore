@@ -25,3 +25,11 @@ results/
 
 # Data files
 data/
+
+# Local audit and analysis notes
+/faers_results.txt
+/FAERS Interactive Analytics — Phase 1.txt
+/CONTINUED_REPOSITORY_AUDIT_REPORT.txt
+/REPOSITORY_AUDIT_REPORT.txt
+/# FAERS Project — Repository Audit.txt
+/FAERS_Project_Prompt_Learning_First.txt
