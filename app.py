@@ -26,6 +26,7 @@ PAGE_OPTIONS = (
     "Forecasting",
     "Classifier",
 )
+ReportingSidebar = tuple[bool, date, date, str, str, str, bool, int, bool]
 
 
 def _inject_styles() -> None:
@@ -36,7 +37,6 @@ def _inject_styles() -> None:
             --faers-ink: #17324d;
             --faers-muted: #60758a;
             --faers-blue: #1d5f91;
-            --faers-blue-soft: #eaf3fa;
             --faers-border: #d7e2eb;
             --faers-surface: #ffffff;
         }
@@ -126,7 +126,7 @@ def _render_navigation() -> str:
     )
 
 
-def _render_reporting_sidebar() -> tuple[bool, date, date, str, str, str, bool, int, bool]:
+def _render_reporting_sidebar() -> ReportingSidebar:
     st.sidebar.markdown("### Overview filters")
     use_date_filter = st.sidebar.checkbox(
         "Filter by receivedate",
@@ -249,16 +249,21 @@ def _render_aggregate_table(
         frame = frame[searchable.any(axis=1)]
 
     total_pages = max(1, (len(frame) + page_size - 1) // page_size)
+    page_key = f"{key}_page"
+    current_page = max(1, min(int(st.session_state.get(page_key, 1)), total_pages))
+    st.session_state[page_key] = current_page
     page = st.number_input(
         "Table page",
         min_value=1,
         max_value=total_pages,
-        value=1,
+        value=current_page,
         step=1,
-        key=f"{key}_page",
+        key=page_key,
     )
     start = (int(page) - 1) * page_size
-    st.caption(f"Showing {min(start + 1, len(frame)):,}–{min(start + page_size, len(frame)):,} of {len(frame):,} rows")
+    first_row = min(start + 1, len(frame))
+    last_row = min(start + page_size, len(frame))
+    st.caption(f"Showing {first_row:,}–{last_row:,} of {len(frame):,} rows")
     st.dataframe(
         frame.iloc[start : start + page_size],
         hide_index=True,
@@ -290,7 +295,8 @@ def _render_results(result: dict[str, Any]) -> None:
         st.info("No reports matched the selected filters.")
         return
 
-    monthly = pd.DataFrame(result["monthly_series"])
+    monthly_rows = result["monthly_series"]
+    monthly = pd.DataFrame(monthly_rows)
     if not monthly.empty:
         monthly["year_month"] = (
             monthly["year"].astype(str)
@@ -302,7 +308,7 @@ def _render_results(result: dict[str, Any]) -> None:
         st.line_chart(monthly_chart)
         st.download_button(
             "Download monthly aggregates",
-            _download_frame(result["monthly_series"]),
+            _download_frame(monthly_rows),
             "faers_monthly_aggregates.csv",
             "text/csv",
             width="content",
@@ -311,15 +317,16 @@ def _render_results(result: dict[str, Any]) -> None:
     left, right = st.columns(2)
     with left:
         st.subheader("Top suspect drugs")
-        drugs = pd.DataFrame(result["top_drugs"])
-        if drugs.empty:
+        drug_rows = result["top_drugs"]
+        if not drug_rows:
             st.info("No suspect-drug aggregates are available.")
         else:
+            drugs = pd.DataFrame(drug_rows)
             st.bar_chart(drugs.set_index("drug_name")[["report_count"]])
-            _render_aggregate_table(result["top_drugs"], key="overview_drugs")
+            _render_aggregate_table(drug_rows, key="overview_drugs")
             st.download_button(
                 "Download top drugs",
-                _download_frame(result["top_drugs"]),
+                _download_frame(drug_rows),
                 "faers_top_drugs.csv",
                 "text/csv",
                 width="content",
@@ -327,15 +334,16 @@ def _render_results(result: dict[str, Any]) -> None:
 
     with right:
         st.subheader("Top reactions")
-        reactions = pd.DataFrame(result["top_reactions"])
-        if reactions.empty:
+        reaction_rows = result["top_reactions"]
+        if not reaction_rows:
             st.info("No reaction aggregates are available.")
         else:
+            reactions = pd.DataFrame(reaction_rows)
             st.bar_chart(reactions.set_index("reaction")[["report_count"]])
-            _render_aggregate_table(result["top_reactions"], key="overview_reactions")
+            _render_aggregate_table(reaction_rows, key="overview_reactions")
             st.download_button(
                 "Download top reactions",
-                _download_frame(result["top_reactions"]),
+                _download_frame(reaction_rows),
                 "faers_top_reactions.csv",
                 "text/csv",
                 width="content",
@@ -349,14 +357,14 @@ def _render_signal_results(result: dict[str, Any]) -> None:
         f"{result['candidate_count']:,} candidates "
         f"({result['total_reports']:,} filtered reports)."
     )
-    signals = pd.DataFrame(result["signals"])
-    if signals.empty:
+    signal_rows = result["signals"]
+    if not signal_rows:
         st.info("No signals matched the configured screening thresholds.")
         return
-    _render_aggregate_table(result["signals"], key="signals")
+    _render_aggregate_table(signal_rows, key="signals")
     st.download_button(
         "Download signal aggregates",
-        _download_frame(result["signals"]),
+        _download_frame(signal_rows),
         "faers_signal_aggregates.csv",
         "text/csv",
         width="content",
