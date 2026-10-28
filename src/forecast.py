@@ -115,7 +115,12 @@ def _month_label(year: int, month: int, steps: int) -> str:
     return f"{next_year}-{next_month:02d}"
 
 
-def _forecast_series(values: list[int], label: str, cutoff_label: str) -> dict:
+def _forecast_series(
+    values: list[int],
+    label: str,
+    cutoff_label: str,
+    horizon: int = HORIZON,
+) -> dict:
     array = np.asarray(values, dtype=float)
     backtests: dict[str, dict[str, float] | dict[str, str]] = {}
     successful: dict[str, dict[str, float]] = {}
@@ -129,7 +134,7 @@ def _forecast_series(values: list[int], label: str, cutoff_label: str) -> dict:
     if not successful:
         raise RuntimeError(f"No forecast model succeeded for {label}")
     selected_name = min(successful, key=lambda name: (successful[name]["mae"], successful[name]["rmse"]))
-    selected = MODELS[selected_name](array, HORIZON)
+    selected = MODELS[selected_name](array, horizon)
     return {
         "series": label,
         "training_cutoff": cutoff_label,
@@ -138,7 +143,7 @@ def _forecast_series(values: list[int], label: str, cutoff_label: str) -> dict:
         "forecast": [
             {
                 "year_month": month,
-                "predicted_count": round(max(0.0, prediction), 2),
+                "predicted_count": round(max(0.0, prediction), 2                ),
                 "lower_95": round(max(0.0, prediction - 1.96 * selected.residual_std), 2),
                 "upper_95": round(max(0.0, prediction + 1.96 * selected.residual_std), 2),
             }

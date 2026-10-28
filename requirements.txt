@@ -7,3 +7,7 @@ pytest
 ruff
 ijson
 statsmodels
+scikit-learn
+joblib
+mlflow
+streamlit

@@ -124,9 +124,33 @@ The calculations include PRR and ROR with approximate 95% log-scale confidence
 intervals. These are disproportionality screening measures, not causal effects.
 The complete output is in [`results/signals.json`](../results/signals.json).
 
-## 8. Limitations and next stages
+## 8. Stage 8 seriousness classifier
+
+The classifier predicts `fact_report.is_serious` using report-level demographics,
+reporter fields, date features, and aggregated drug/reaction counts. The split
+is chronological: earlier reporting periods are used for training and later
+periods for testing.
+
+| Model | ROC-AUC | Precision | Recall | Brier score | Calibration MAE |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 0.50 | 0.00 | 0.00 | 0.31 | 0.26 |
+| Logistic regression | 0.86 | 0.82 | 0.83 | 0.15 | 0.07 |
+| Gradient boosting | 0.86 | 0.85 | 0.77 | 0.15 | 0.04 |
+
+- **Training rows:** 1,640; **test rows:** 10,360
+- **Selected model:** gradient_boosting
+- **Persisted model:** [`results\model\seriousness_classifier.joblib`](../results\model\seriousness_classifier.joblib)
+- **Tracking database:** `sqlite:///C:/Users/yuvra/Desktop/FAERS-Adverse-Drug-Event-Analysis/results/mlflow.db`
+
+The statsmodels logistic model also writes odds ratios and approximate 95%
+confidence intervals to `results/ml_metrics.json` (the current fit reports
+`converged: False`;
+interpret sparse-category estimates cautiously). The classifier is predictive
+and should not be interpreted as a causal model or clinical decision tool.
+
+## 9. Limitations and next stages
 
 - FAERS is a spontaneous-reporting system; counts do not estimate incidence or causality.
 - The project currently analyzes one 12,000-report sample rather than all 31 source files.
 - Product and manufacturer results are quality/reporting analytics, not supply-chain or demand forecasts.
-- ML, API, Streamlit, Docker, CI, and broader automated tests remain later roadmap work.
+- API, Streamlit, Docker, CI, and broader automated tests remain later roadmap work.

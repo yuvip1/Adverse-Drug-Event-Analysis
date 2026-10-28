@@ -38,6 +38,7 @@ def _summary_metrics(
     trend: dict[str, Any],
     forecast: dict[str, Any],
     signals: dict[str, Any],
+    ml_metrics: dict[str, Any],
 ) -> dict[str, Any]:
     serious = {str(row["is_serious"]).lower(): row["cnt"] for row in stats["serious_breakdown"]}
     total_reports = quality["final_report_count"]
@@ -120,6 +121,7 @@ def _summary_metrics(
             "signal_count": signals["signal_count"],
             "top_signals": signals["signals"][:5],
         },
+        "ml_classifier": ml_metrics,
         "stage_status": {
             "stage_0_setup": "complete",
             "stage_1_ingest_and_model": "complete",
@@ -129,6 +131,7 @@ def _summary_metrics(
             "stage_5_readme_and_results": "complete",
             "stage_6_signal_detection": "implemented; SQL-backed run completed",
             "stage_7_forecasting": "implemented; rolling-origin model comparison completed",
+            "stage_8_ml_classifier": "implemented; time-based evaluation and local MLflow tracking completed",
         },
     }
 
@@ -156,6 +159,7 @@ def _render_report(metrics: dict[str, Any]) -> str:
     pareto = metrics["pareto"]
     forecast = metrics["forecast"]
     signals = metrics["signals"]
+    ml = metrics["ml_classifier"]
 
     missingness_lines = [
         f"| {field} | {_fmt(values['null_count'])} | {_fmt(values['null_pct'])}% |"
@@ -277,12 +281,36 @@ The calculations include PRR and ROR with approximate 95% log-scale confidence
 intervals. These are disproportionality screening measures, not causal effects.
 The complete output is in [`results/signals.json`](../results/signals.json).
 
-## 8. Limitations and next stages
+## 8. Stage 8 seriousness classifier
+
+The classifier predicts `fact_report.is_serious` using report-level demographics,
+reporter fields, date features, and aggregated drug/reaction counts. The split
+is chronological: earlier reporting periods are used for training and later
+periods for testing.
+
+| Model | ROC-AUC | Precision | Recall | Brier score | Calibration MAE |
+|---|---:|---:|---:|---:|---:|
+| Baseline | {_fmt(ml['evaluation']['baseline']['roc_auc'])} | {_fmt(ml['evaluation']['baseline']['precision'])} | {_fmt(ml['evaluation']['baseline']['recall'])} | {_fmt(ml['evaluation']['baseline']['brier_score'])} | {_fmt(ml['evaluation']['baseline']['calibration_mean_absolute_error'])} |
+| Logistic regression | {_fmt(ml['evaluation']['logistic_regression']['roc_auc'])} | {_fmt(ml['evaluation']['logistic_regression']['precision'])} | {_fmt(ml['evaluation']['logistic_regression']['recall'])} | {_fmt(ml['evaluation']['logistic_regression']['brier_score'])} | {_fmt(ml['evaluation']['logistic_regression']['calibration_mean_absolute_error'])} |
+| Gradient boosting | {_fmt(ml['evaluation']['gradient_boosting']['roc_auc'])} | {_fmt(ml['evaluation']['gradient_boosting']['precision'])} | {_fmt(ml['evaluation']['gradient_boosting']['recall'])} | {_fmt(ml['evaluation']['gradient_boosting']['brier_score'])} | {_fmt(ml['evaluation']['gradient_boosting']['calibration_mean_absolute_error'])} |
+
+- **Training rows:** {_fmt(ml['train_rows'])}; **test rows:** {_fmt(ml['test_rows'])}
+- **Selected model:** {ml['selected_model']}
+- **Persisted model:** [`{ml['model_path']}`](../{ml['model_path']})
+- **Tracking database:** `{ml['mlflow_tracking_uri']}`
+
+The statsmodels logistic model also writes odds ratios and approximate 95%
+confidence intervals to `results/ml_metrics.json` (the current fit reports
+`converged: {ml['evaluation']['logistic_regression_statsmodels'].get('converged', False)}`;
+interpret sparse-category estimates cautiously). The classifier is predictive
+and should not be interpreted as a causal model or clinical decision tool.
+
+## 9. Limitations and next stages
 
 - FAERS is a spontaneous-reporting system; counts do not estimate incidence or causality.
 - The project currently analyzes one 12,000-report sample rather than all 31 source files.
 - Product and manufacturer results are quality/reporting analytics, not supply-chain or demand forecasts.
-- ML, API, Streamlit, Docker, CI, and broader automated tests remain later roadmap work.
+- API, Streamlit, Docker, CI, and broader automated tests remain later roadmap work.
 """
 
 
@@ -294,7 +322,8 @@ def main() -> None:
     trend = _read_json("trend.json")
     forecast = _read_json("forecast.json")
     signals = _read_json("signals.json")
-    metrics = _summary_metrics(stats, quality, pareto, cycle_time, trend, forecast, signals)
+    ml_metrics = _read_json("ml_metrics.json")
+    metrics = _summary_metrics(stats, quality, pareto, cycle_time, trend, forecast, signals, ml_metrics)
 
     RESULTS_DIR.mkdir(exist_ok=True)
     REPORT_PATH.parent.mkdir(exist_ok=True)

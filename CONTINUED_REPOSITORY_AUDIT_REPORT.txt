@@ -1,0 +1,1531 @@
+FAERS ADVERSE DRUG EVENT ANALYSIS
+CONTINUED REPOSITORY AUDIT
+STREAMLIT APPLICATION READINESS
+
+Report date: October 27, 2026
+Scope: Read-only source review for the approved Streamlit/service-layer direction
+
+No source files were modified. No packages were installed. No ingestion,
+model retraining, database mutation, or expensive job was run. The only
+created file is this report.
+
+======================================================================
+A. FINDINGS ORGANIZED BY FILE
+======================================================================
+
+----------------------------------------------------------------------
+1. src/clean.py
+----------------------------------------------------------------------
+
+Source-code facts:
+
+- clean() connects to SQL Server using SQLSERVER_CONNECTION.
+- It operates in place on stg.reports, stg.drugs, and stg.reactions.
+- Invalid or out-of-range receivedate values are quarantined and the
+  corresponding report rows are deleted.
+- receivedate must parse from the first eight characters as YYYYMMDD.
+- Dates before 1900-01-01 or after the machine's current date are rejected.
+- patientonsetage is converted using unit codes:
+    800 = months
+    801 = years
+    802 = weeks
+    803 = days
+    804 = hours
+- Ages below 0 or above 120 years are set to NULL, along with the age unit.
+- patientweight values <= 0 or > 500 are set to NULL.
+- Invalid numeric weight values are treated as invalid and set to NULL.
+- Older versions are removed by keeping MAX(safetyreportversion) for each
+  safetyreportid.
+- Orphaned staging drug and reaction rows are deleted after report-version
+  deduplication.
+- The function records quarantine rows and quality-log rows.
+- Missingness is measured for patientsex, patientonsetage, patientweight,
+  primarysourcecountry, occurcountry, and companynumb.
+- The function writes results/data_quality.json.
+
+Important behavior:
+
+- The cleaning step mutates staging data. It is not a read-only query
+  service and should not be called from a web request.
+- Missing values are generally retained as NULL after cleaning, not filled
+  with user-facing defaults.
+- The code uses today's date at execution time, so reproducibility of the
+  date-range rule depends on the run date.
+
+Application implication:
+
+- A new user-entered report can be validated with similar rules, but that
+  does not mean it can be inserted into the warehouse safely.
+- The cleaning functions are private helpers and are not currently exposed
+  as a report-validation service.
+
+----------------------------------------------------------------------
+2. src/transform.py
+----------------------------------------------------------------------
+
+Source-code facts:
+
+transform() clears the warehouse tables in foreign-key-safe order, inserts
+static/sentinel dimensions, reads cleaned staging rows, and creates facts.
+
+Report mapping:
+
+stg.reports.safetyreportid
+    -> fact_report.safetyreportid
+
+stg.reports.safetyreportversion
+    -> fact_report.safetyreportversion
+
+stg.reports.reporttype
+    -> fact_report.report_type
+
+stg.reports.serious == "1"
+    -> fact_report.is_serious = 1
+
+stg.reports.duplicate == "1"
+    -> fact_report.is_duplicate = 1
+
+stg.reports.receivedate
+    -> fact_report.date_key
+
+stg.reports.receiptdate
+    -> fact_report.receipt_date_key
+
+stg.reports.transmissiondate
+    -> fact_report.transmission_date_key
+
+stg.reports.primarysourcecountry
+    -> fact_report.country_key through dim_country
+
+stg.reports.occurcountry
+    -> fact_report.occur_country_key through dim_country
+
+sender and primary-source reporter fields
+    -> dim_reporter
+    -> fact_report.reporter_key
+
+stg.reports.patientagegroup
+    -> dim_age_group
+    -> fact_report.age_group_key
+
+stg.reports.patientsex
+    -> fact_report.sex_code
+
+stg.reports.patientonsetage plus patientonsetageunit
+    -> fact_report.onset_age_years
+
+stg.reports.patientweight
+    -> fact_report.weight_kg
+
+stg.reports.companynumb
+    -> fact_report.companynumb
+
+Important implementation detail:
+
+The INSERT tuple in transform.py passes dk for both date_key and the
+receive_date_key position, while rdk is passed for receipt_date_key.
+The source names are therefore important: date_key is based on receivedate,
+receipt_date_key is based on receiptdate, and the receive_date_key value
+currently receives the same receivedate key. This should be confirmed
+against the intended semantics before exposing date filters.
+
+Drug mapping:
+
+- The preferred normalized drug identity is openfda_generic_name.
+- Fallback order is activesubstancename, then medicinalproduct, then
+  UNKNOWN.
+- The normalized drug_name is trimmed, uppercased, and limited to 512
+  characters.
+- generic_name, substance_name, brand_name, manufacturer_name,
+  dosage_form, and route are stored in dim_drug.
+- drugcharacterization == "1" becomes fact_drug.is_suspect = 1.
+- drugauthorizationnumb and drugindication remain on fact_drug.
+
+Reaction mapping:
+
+- reactionmeddrapt is trimmed and uppercased.
+- Missing reaction names become UNKNOWN.
+- reactionmeddrapt maps to dim_reaction.reaction_meddra_apt.
+- reactionoutcome maps to fact_reaction.outcome_code.
+
+Data types from the schema:
+
+- fact_report.is_serious and is_duplicate: BIT.
+- fact_report.sex_code and report_type: VARCHAR.
+- fact_report.onset_age_years and weight_kg: DECIMAL(8,2).
+- fact_report date and dimension keys: INT.
+- fact_drug.is_suspect: BIT.
+- Dimension labels and names: VARCHAR with lengths defined in
+  sql/02_star_schema.sql.
+
+Missing-value behavior:
+
+- Missing dates map to the -1 dim_date sentinel.
+- Missing country codes map to the XX/-1 unknown country sentinel.
+- Missing age groups map to age_group_key -1.
+- Missing age and weight remain NULL on fact_report.
+- Missing sex remains NULL in fact_report, later displayed as unknown in
+  some views.
+- Missing drug/reaction values become UNKNOWN dimension members.
+- Missing reporter fields are normalized to empty-string components for
+  reporter lookup.
+
+Classifier feature availability:
+
+The following features are directly represented in fact_report or related
+dimensions:
+
+- onset_age_years: fact_report, nullable DECIMAL(8,2)
+- weight_kg: fact_report, nullable DECIMAL(8,2)
+- sex_code: fact_report, nullable VARCHAR(10)
+- report_type: fact_report, nullable VARCHAR(10)
+- country_code: dim_country.iso2_code through fact_report.country_key
+- reporter_qualification: dim_reporter.qualification through reporter_key
+- report_year: dim_date.year through fact_report.date_key
+- report_month: dim_date.month through fact_report.date_key
+- drug_count: count of distinct fact_drug.drug_key for a report
+- suspect_drug_count: count of distinct suspect fact_drug.drug_key
+- reaction_count: count of distinct fact_reaction.reaction_key for a report
+
+Can a new user-entered report provide these features?
+
+Partially.
+
+- Age, weight, sex, report type, country, reporter qualification, and
+  date can be collected in a form.
+- Drug count, suspect-drug count, and reaction count require either a
+  structured list of drugs/reactions or an existing database report.
+- A user-entered report would not naturally have a trustworthy report year
+  and month unless the application defines whether these mean event date,
+  receivedate, or current submission date.
+- The model was trained on database-derived counts and categorical
+  encodings. A new form must reproduce those semantics exactly.
+
+The safer first application design is to support predictions for an
+existing selected report, or to clearly label a new-report prediction as
+an estimate based on user-supplied feature values.
+
+----------------------------------------------------------------------
+3. sql/02_star_schema.sql
+----------------------------------------------------------------------
+
+Primary keys:
+
+- dim_date.date_key
+- dim_country.country_key
+- dim_age_group.age_group_key
+- dim_drug.drug_key
+- dim_reaction.reaction_key
+- dim_reporter.reporter_key
+- fact_report.report_key
+- fact_drug.drug_key (fact-row identity)
+- fact_reaction.reaction_key (fact-row identity)
+
+Foreign keys:
+
+fact_report:
+
+- date_key -> dim_date.date_key
+- receipt_date_key -> dim_date.date_key
+- receive_date_key -> dim_date.date_key
+- transmission_date_key -> dim_date.date_key
+- country_key -> dim_country.country_key
+- occur_country_key -> dim_country.country_key
+- reporter_key -> dim_reporter.reporter_key
+- age_group_key -> dim_age_group.age_group_key
+
+fact_drug:
+
+- report_key -> fact_report.report_key
+- drug_key_dim -> dim_drug.drug_key
+
+fact_reaction:
+
+- report_key -> fact_report.report_key
+- reaction_key_dim -> dim_reaction.reaction_key
+
+Relationship grain:
+
+- fact_report is one row per retained safety report version.
+- fact_drug is potentially many rows per report.
+- fact_reaction is potentially many rows per report.
+- A report can contain multiple drugs and multiple reactions.
+
+Join-duplication risk:
+
+Joining fact_report to fact_drug and fact_reaction in the same query
+creates a many-to-many multiplication:
+
+    one report x two drugs x three reactions = six joined rows
+
+Therefore, COUNT(*) and SUM(is_serious) are unsafe in a combined
+fact_drug/fact_reaction join unless the query first aggregates or uses
+distinct report-level logic.
+
+Safe counting patterns:
+
+All reports:
+
+    COUNT(DISTINCT fr.report_key)
+
+Serious reports after a drug join:
+
+    COUNT(DISTINCT CASE WHEN fr.is_serious = 1 THEN fr.report_key END)
+
+Drug/reaction pair candidates:
+
+- Deduplicate report/drug with SELECT DISTINCT report_key, drug_key_dim.
+- Deduplicate report/reaction with SELECT DISTINCT report_key,
+  reaction_key_dim.
+- Join those deduplicated sets on report_key.
+- Count DISTINCT report_key for the pair.
+
+This is the pattern implemented in sql/04_signal_views.sql.
+
+Safe aggregation alternative:
+
+- Aggregate fact_drug to report/drug grain before joining report-level
+  results.
+- Aggregate fact_reaction to report/reaction grain before joining.
+- Never sum a report-level seriousness flag after a raw drug/reaction
+  many-to-many join.
+
+----------------------------------------------------------------------
+4. sql/03_views.sql
+----------------------------------------------------------------------
+
+vw_top_drugs
+
+Columns:
+- drug_name
+- generic_name
+- manufacturer_name
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Suspect-drug volume and seriousness summary.
+
+Source/filter behavior:
+- fact_drug joined to dim_drug and fact_report.
+- WHERE fd.is_suspect = 1.
+- No date, country, reaction, or user parameter filter.
+- Uses COUNT(*) and is safe for this one fact_drug-to-fact_report join
+  at the current row meaning only if each drug row is intended to count
+  drug mentions. It is not necessarily a distinct-report count when a
+  report contains the same normalized drug more than once.
+
+vw_top_reactions
+
+Columns:
+- reaction_meddra_apt
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Reaction volume and seriousness summary.
+
+Source/filter behavior:
+- fact_reaction joined to dim_reaction and fact_report.
+- No date, drug, country, or user parameter filter.
+- COUNT(*) counts reaction fact rows, not explicitly DISTINCT reports.
+
+vw_serious_by_age
+
+Columns:
+- age_group_label
+- age_min_years
+- age_max_years
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Seriousness rate by age group.
+
+Filter behavior:
+- All fact_report rows joined to dim_age_group.
+- No external filters.
+
+vw_serious_by_sex
+
+Columns:
+- sex_code
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Seriousness rate by sex.
+
+Filter behavior:
+- Groups fact_report directly.
+- NULL sex is displayed as unknown.
+- No external filters.
+
+vw_serious_by_country
+
+Columns:
+- iso2_code
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Seriousness rate by primary-source country.
+
+Filter behavior:
+- Joins fact_report to dim_country.
+- Excludes iso2_code = XX.
+- No date, drug, reaction, or seriousness filter because seriousness is
+  an output measure rather than a WHERE condition.
+
+vw_serious_by_reporter
+
+Columns:
+- qualification
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Seriousness rate by reporter qualification.
+
+Filter behavior:
+- Joins fact_report to dim_reporter.
+- NULL qualification is displayed as unknown.
+- No external filters.
+
+vw_outcomes
+
+Columns:
+- outcome_code
+- report_count
+- share_pct
+
+Purpose:
+- Distribution of reaction outcome codes.
+
+Filter behavior:
+- Groups fact_reaction.
+- NULL outcome is displayed as unknown.
+- share_pct denominator is the total fact_reaction row count.
+- No date, drug, country, or seriousness filter.
+
+vw_manufacturer_quality
+
+Columns:
+- manufacturer_name
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Suspect-drug manufacturer volume and seriousness summary.
+
+Filter behavior:
+- Suspect drugs only.
+- Uses COUNT(DISTINCT fd.report_key) for report_count.
+- No date, reaction, country, or dynamic seriousness filter.
+
+vw_dosage_route_quality
+
+Columns:
+- dosage_form
+- route
+- report_count
+- serious_count
+- serious_pct
+
+Purpose:
+- Suspect-drug dosage-form and route summary.
+
+Filter behavior:
+- Suspect drugs only.
+- Uses COUNT(DISTINCT fd.report_key).
+- No date, reaction, country, or dynamic seriousness filter.
+
+Parameterized filtering requirement:
+
+The existing views are fixed, non-parameterized SQL Server views. A web
+application cannot pass parameters directly into them. The application
+needs new parameterized SELECT statements or stored procedures that apply
+validated filters before aggregation.
+
+Required filter implementation:
+
+Date:
+- Filter using an explicitly chosen fact_report date relationship.
+- The application must define whether date means date_key/receivedate,
+  receipt_date_key/receiptdate, receive_date_key, or transmission date.
+
+Drug:
+- Filter through fact_drug and dim_drug.
+- Use a report-level EXISTS predicate or a distinct report subquery when
+  the output is report-based.
+
+Reaction:
+- Filter through fact_reaction and dim_reaction.
+- Use EXISTS or a distinct report subquery to avoid multiplying rows.
+
+Country:
+- Choose primary-source country_key or occur_country_key explicitly.
+- Join to dim_country and filter iso2_code.
+
+Seriousness:
+- Filter fact_report.is_serious directly.
+- For percentages, calculate numerator and denominator after all filters.
+
+Recommended implementation style:
+
+- Use parameterized pyodbc placeholders.
+- Whitelist selectable sort columns.
+- Apply TOP or pagination.
+- Aggregate at report grain before joining multiple child facts.
+- Return both the result rows and filter metadata.
+
+----------------------------------------------------------------------
+5. sql/04_signal_views.sql
+----------------------------------------------------------------------
+
+View: dbo.vw_drug_reaction_pairs
+
+Columns:
+- drug_key
+- reaction_key
+- drug_name
+- generic_name
+- manufacturer_name
+- dosage_form
+- route
+- reaction_meddra_apt
+- pair_count
+- drug_total
+- reaction_total
+
+Purpose:
+
+Provides the report-level building blocks for a 2x2 table:
+
+- pair_count = a, reports with both drug and reaction
+- drug_total = a+b, reports with the suspect drug
+- reaction_total = a+c, reports with the reaction
+- total_reports = n, supplied separately by signal_analysis.py
+
+Internal logic:
+
+- suspect CTE deduplicates report_key/drug_key_dim and keeps
+  is_suspect = 1.
+- rxn CTE deduplicates report_key/reaction_key_dim.
+- drug_totals counts distinct reports per suspect drug.
+- rxn_totals counts distinct reports per reaction.
+- The two deduplicated sets are joined on report_key.
+- pair_count is COUNT(DISTINCT s.report_key).
+
+Filters supported by the view itself:
+
+- Suspect drugs only.
+- No date filter.
+- No country filter.
+- No report seriousness filter.
+- No user-selected drug/reaction filter inside the view.
+- The caller can filter the view's returned drug_key, reaction_key, and
+  pair_count, as signal_analysis.py currently does for top drugs and
+  minimum pair count.
+
+Date-filtered signal requirement:
+
+The current view calculates totals across the entire warehouse. To support
+a date range correctly, all three quantities must use the same filtered
+report universe:
+
+- filtered pair_count
+- filtered drug_total
+- filtered reaction_total
+- filtered total_reports
+
+A simple outer WHERE on the current view cannot provide this because the
+view does not expose report dates and its totals were already calculated.
+A new date-aware query or view must apply the date restriction inside each
+aggregation CTE.
+
+Country and seriousness filters have the same requirement. The filter must
+be applied consistently to suspect pairs, drug totals, reaction totals,
+and total report count.
+
+----------------------------------------------------------------------
+6. src/signal_analysis.py
+----------------------------------------------------------------------
+
+calculate_signal() signature:
+
+    calculate_signal(
+        pair_count: int,
+        drug_total: int,
+        reaction_total: int,
+        total_reports: int
+    ) -> SignalMetrics
+
+SignalMetrics fields:
+
+- a
+- b
+- c
+- d
+- prr
+- prr_lower_95
+- prr_upper_95
+- ror
+- ror_lower_95
+- ror_upper_95
+- chi_square
+
+2x2 cells:
+
+- a = pair_count
+- b = drug_total - pair_count
+- c = reaction_total - pair_count
+- d = total_reports - drug_total - reaction_total + pair_count
+
+Validation:
+
+- Rejects total_reports <= 0.
+- Rejects negative cells.
+- PRR is unavailable when required cells are zero.
+- ROR is unavailable when required cells are zero.
+- Chi-square is calculated when margins are valid.
+
+Reusable logic:
+
+- SignalMetrics dataclass.
+- calculate_signal().
+- _log_ci().
+- _row_to_signal() as a possible output-shaping reference.
+
+Fixed batch logic in run():
+
+- Reads SQLSERVER_CONNECTION directly.
+- Always queries total reports without date/country/seriousness filters.
+- Selects top suspect drugs using TOP (?) and drug_total.
+- Uses dbo.vw_drug_reaction_pairs.
+- Requires pair_count >= min_pair_count.
+- Screens PRR >= 2 and chi_square >= 4.
+- Sorts by chi_square and PRR descending.
+- Writes results/signals.json.
+
+Recommended application-facing signature:
+
+    get_signal(
+        drug_key: int,
+        reaction_key: int,
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        country_code: str | None = None,
+        serious_only: bool | None = None,
+        min_pair_count: int = 3,
+        prr_threshold: float = 2.0,
+        chi_square_threshold: float = 4.0,
+    ) -> dict[str, Any]
+
+Recommended return structure:
+
+    {
+        "filters": {
+            "drug_key": ...,
+            "reaction_key": ...,
+            "start_date": ...,
+            "end_date": ...,
+            "country_code": ...,
+            "serious_only": ...
+        },
+        "counts": {
+            "total_reports": ...,
+            "pair_count": ...,
+            "drug_total": ...,
+            "reaction_total": ...
+        },
+        "metrics": {
+            "a": ...,
+            "b": ...,
+            "c": ...,
+            "d": ...,
+            "prr": ...,
+            "prr_lower_95": ...,
+            "prr_upper_95": ...,
+            "ror": ...,
+            "ror_lower_95": ...,
+            "ror_upper_95": ...,
+            "chi_square": ...
+        },
+        "screening": {
+            "passes": ...,
+            "min_pair_count": ...,
+            "prr_threshold": ...,
+            "chi_square_threshold": ...
+        }
+    }
+
+This signature is a recommendation only and was not implemented.
+
+----------------------------------------------------------------------
+7. src/trend.py
+----------------------------------------------------------------------
+
+Source-code facts:
+
+- trend.py connects directly to SQL Server at module import time.
+- It groups fact_report by dim_date.year and dim_date.month.
+- It produces total_count and serious_count.
+- It inserts zero-valued months between the first and last observed
+  month.
+- It calculates a linear polyfit over the total report count.
+- It calculates average receipt-to-receive lag from stg.reports.
+- It writes results/trend.json.
+
+Output fields:
+
+- monthly_series:
+    year
+    month
+    count
+    total_count
+    serious_count
+- series_definition
+- polyfit_coefficients
+- avg_receipt_to_receive_lag_days
+
+Assumptions:
+
+- fact_report.date_key is the intended reporting date.
+- Missing months between observed endpoints represent zero reports.
+- The latest observed month may be incomplete, which forecast.py handles
+  by excluding it.
+
+Interactive reuse:
+
+- The aggregation SQL can be moved into a parameterized service query.
+- The existing monthly result shape can be reused for charts.
+- The current module-level execution should not be imported by a web
+  request because it opens a database connection immediately and writes
+  a file.
+
+----------------------------------------------------------------------
+8. src/forecast.py
+----------------------------------------------------------------------
+
+Input:
+
+- Reads results/trend.json.
+- Uses monthly_series.
+- Excludes the latest observed month in main().
+- Uses total_count and serious_count.
+
+Models:
+
+- _seasonal_naive(): requires at least 12 observations.
+- _ets(): requires at least 24 observations.
+- _sarima(): requires at least 36 observations.
+
+Parameters:
+
+- HORIZON = 12.
+- BACKTEST_ORIGINS = 12.
+- MIN_TRAIN = 36.
+- SARIMA order = (1, 1, 1).
+- SARIMA seasonal_order = (1, 0, 1, 12).
+
+Outputs:
+
+- results/forecast.json
+- Selected model for each series.
+- Backtest results for each successful model.
+- Forecast rows containing year_month, predicted_count, lower_95,
+  and upper_95.
+
+Backtesting:
+
+- Rolling-origin one-step forecasts.
+- Successful folds are evaluated with MAE, RMSE, and sMAPE.
+- Negative predictions are clipped to zero.
+- The selected model minimizes MAE, then RMSE.
+
+Interactive reuse:
+
+- The individual model functions can accept a user-selected horizon.
+- _metrics() and _backtest() can be reused with a selected series.
+- A service can query a filtered monthly series and call the existing
+  model functions without changing the existing batch workflow.
+- A selected date range is possible if the service constructs a complete
+  monthly array before forecasting.
+- The current batch main() remains unchanged if the new service calls
+  lower-level functions directly.
+
+Limitations:
+
+- Forecasting a very short filtered series can fail because of minimum
+  observation requirements.
+- The current prediction interval is residual-standard-deviation based,
+  not a full probabilistic forecast interval.
+- The current model-selection logic is based on one rolling-origin setup
+  and may be unstable for small filtered subsets.
+
+Recommended application inputs:
+
+    series: "total_reports" | "serious_reports"
+    method: "seasonal_naive" | "ets" | "sarima" | "best"
+    horizon_months: int
+    start_date: date | None
+    end_date: date | None
+    filters: dict[str, str | int | bool | None]
+
+----------------------------------------------------------------------
+9. src/ml_classifier.py AND SAVED MODEL CONTRACT
+----------------------------------------------------------------------
+
+Exact feature order in source:
+
+1. onset_age_years
+2. weight_kg
+3. sex_code
+4. report_type
+5. country_code
+6. reporter_qualification
+7. report_year
+8. report_month
+9. drug_count
+10. suspect_drug_count
+11. reaction_count
+
+Numeric features:
+
+- onset_age_years
+- weight_kg
+- report_year
+- report_month
+- drug_count
+- suspect_drug_count
+- reaction_count
+
+Categorical features:
+
+- sex_code
+- report_type
+- country_code
+- reporter_qualification
+
+Preprocessing:
+
+Numeric pipeline:
+- SimpleImputer(strategy="median")
+- StandardScaler()
+
+Categorical pipeline:
+- SimpleImputer(strategy="most_frequent")
+- OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+
+Models trained:
+
+- LogisticRegression(max_iter=1000, class_weight="balanced")
+- GradientBoostingClassifier(random_state=42, n_estimators=150,
+  max_depth=2)
+
+Target:
+
+- fact_report.is_serious
+- Converted to integer.
+- 0 means the recorded report was not marked serious.
+- 1 means the recorded report was marked serious.
+
+The model does not predict drug causality or whether a patient will be
+harmed.
+
+Saved-model loading:
+
+    import joblib
+    model = joblib.load(
+        "results/model/seriousness_classifier.joblib"
+    )
+
+The persisted object is a complete scikit-learn Pipeline, so the caller
+must pass a pandas DataFrame with the exact feature names. The pipeline
+contains preprocessing and the selected estimator.
+
+Prediction behavior expected from source:
+
+    labels = model.predict(frame)
+    probabilities = model.predict_proba(frame)[:, 1]
+
+The exact persisted artifact should be treated as trusted local content
+because it uses joblib/pickle serialization.
+
+Training workflow that must not be used per request:
+
+- run()
+- load_features()
+- _split()
+- model.fit(...)
+
+Recommended prediction-wrapper signature:
+
+    predict_seriousness(
+        features: Mapping[str, object] | pd.DataFrame,
+        *,
+        model_path: Path | None = None
+    ) -> dict[str, object]
+
+Recommended return structure:
+
+    {
+        "target": "fact_report.is_serious",
+        "predicted_label": 0 or 1,
+        "predicted_label_name": "not_serious" or "serious",
+        "serious_probability": float,
+        "model_path": "...",
+        "feature_columns": [...],
+        "warnings": [...]
+    }
+
+Recommended tests:
+
+- Model file exists.
+- Model loads without fitting.
+- Missing feature raises a clear validation error.
+- Extra feature is ignored or rejected according to a documented rule.
+- Categorical unknown values are accepted by the fitted encoder.
+- Numeric missing values follow the trained imputation behavior.
+- predict_proba returns a probability between 0 and 1.
+- Returned feature order matches FEATURE_COLUMNS.
+- A known fixture produces a stable output shape.
+
+New report versus existing report:
+
+Existing report:
+- Counts can be computed exactly from fact_drug and fact_reaction.
+- Database-derived country and reporter values are available.
+- The model's training semantics can be reproduced more faithfully.
+
+New user-entered report:
+- Requires the user to supply or select all 11 feature values.
+- Drug_count, suspect_drug_count, and reaction_count require structured
+  drug/reaction inputs.
+- Report year/month requires an explicit date definition.
+- The resulting label is a model prediction for a hypothetical record,
+  not a persisted FAERS report.
+- Missing values may be imputed, but the UI must disclose this.
+
+----------------------------------------------------------------------
+10. requirements.txt, README.md, AND tests/
+----------------------------------------------------------------------
+
+requirements.txt currently declares:
+
+- pyodbc
+- SQLAlchemy
+- python-dotenv
+- pandas
+- numpy
+- pytest
+- ruff
+- ijson
+- statsmodels
+- scikit-learn
+- joblib
+- mlflow
+
+Additional dependency required for the proposed UI:
+
+- streamlit
+
+No Streamlit package is currently declared in requirements.txt.
+
+README setup commands:
+
+    python -m venv .venv
+    .venv\Scripts\Activate.ps1
+    pip install -r requirements.txt
+
+README pipeline commands:
+
+    python sql/run_ddl.py sql/01_create_database.sql
+    python sql/run_ddl.py sql/02_star_schema.sql
+    python sql/run_ddl.py sql/03_views.sql
+    python sql/run_ddl.py sql/04_signal_views.sql
+    python src/ingest.py C:\path\to\drug-event-0001-of-0031.json.zip
+    python src/clean.py
+    python src/transform.py
+    python src/stats.py
+    python src/pareto.py
+    python src/cycle_time.py
+    python src/trend.py
+    python src/forecast.py
+    python src/signal_analysis.py --top-drugs 100 --min-pair-count 3
+    python src/ml_classifier.py
+    python src/export_powerbi.py
+    python src/build_metrics.py
+
+Test command:
+
+- README does not currently document an exact pytest command.
+- The repository's tests can be run with:
+
+    python -m pytest
+
+This command was not run during this audit.
+
+Testing coverage:
+
+- Signal pure calculations: covered.
+- Forecast metric and seasonal-naive behavior: covered.
+- Classifier split and metric helper: covered.
+- Classifier loading and prediction: not covered.
+- SQL integration: not covered.
+- Data quality: not covered.
+- Application behavior: not covered.
+- Power BI export: not covered.
+
+README status text is stale in places: it says later ML and validated
+forecasting are not implemented, although the current source and
+generated artifacts contain Stage 7 and Stage 8 implementations.
+
+======================================================================
+B. CORRECTED END-TO-END DATA-FLOW DIAGRAM
+======================================================================
+
+Raw FAERS ZIP
+    |
+    v
+src/ingest.py: ingest(zip_path)
+    |
+    v
+SQL Server staging
+    |
+    +--> stg.reports
+    +--> stg.drugs
+    +--> stg.reactions
+    |
+    v
+src/clean.py: clean()
+    |
+    +--> validate receivedate
+    +--> quarantine invalid reports
+    +--> null implausible age/weight
+    +--> retain latest report version
+    +--> remove orphan child rows
+    +--> results/data_quality.json
+    |
+    v
+src/transform.py: transform()
+    |
+    +--> dim_date
+    +--> dim_country
+    +--> dim_age_group
+    +--> dim_drug
+    +--> dim_reaction
+    +--> dim_reporter
+    +--> fact_report
+    +--> fact_drug
+    +--> fact_reaction
+    |
+    +----------------------+-----------------------+
+    |                      |                       |
+    v                      v                       v
+sql/03_views.sql     sql/04_signal_views.sql   src/ml_classifier.py
+    |                      |                       |
+    |                      v                       +--> load_features()
+    |                deduplicated pair counts       +--> chronological split
+    |                      |                       +--> fit/evaluate
+    |                      v                       +--> MLflow logging
+    |                src/signal_analysis.py        +--> joblib persistence
+    |                      |                       +--> results/ml_metrics.json
+    |                      v
+    |                results/signals.json
+    |
+    +--> src/stats.py       -> results/stats.json
+    +--> src/pareto.py      -> results/pareto.json
+    +--> src/cycle_time.py  -> results/cycle_time.json
+    +--> src/trend.py       -> results/trend.json
+                                      |
+                                      v
+                                src/forecast.py
+                                      |
+                                      v
+                                results/forecast.json
+    |
+    +--> src/export_powerbi.py
+              |
+              v
+        powerbi/data/*.csv
+
+All generated JSON outputs
+    |
+    v
+src/build_metrics.py
+    |
+    +--> results/metrics.json
+    +--> docs/RESULTS.md
+
+Proposed future application path:
+
+Streamlit app
+    |
+    v
+services/
+    |
+    +--> parameterized SQL query service
+    +--> signal service -> calculate_signal()
+    +--> analytics service
+    +--> forecast service -> forecast model functions
+    +--> classifier service -> joblib.load() once
+    |
+    +--> SQL Server
+    +--> trusted persisted model
+
+======================================================================
+C. PROPOSED MINIMAL SERVICE-LAYER INTERFACE
+======================================================================
+
+The following signatures are design proposals, not implemented code.
+
+----------------------------------------------------------------------
+services/db.py
+----------------------------------------------------------------------
+
+    get_connection() -> pyodbc.Connection
+
+    fetch_dataframe(
+        sql: str,
+        params: Sequence[object] = (),
+        *,
+        timeout_seconds: int = 30
+    ) -> pandas.DataFrame
+
+Requirements:
+- Use parameterized placeholders.
+- Never concatenate user values into SQL.
+- Keep credentials server-side.
+- Apply query timeout.
+
+----------------------------------------------------------------------
+services/analytics_service.py
+----------------------------------------------------------------------
+
+    get_reporting_summary(
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        drug_name: str | None = None,
+        reaction_name: str | None = None,
+        country_code: str | None = None,
+        serious_only: bool | None = None,
+        limit: int = 100
+    ) -> dict[str, object]
+
+Suggested return:
+
+    {
+        "filters": {...},
+        "summary": {
+            "report_count": int,
+            "serious_count": int,
+            "serious_pct": float | None
+        },
+        "monthly_series": [
+            {
+                "year": int,
+                "month": int,
+                "report_count": int,
+                "serious_count": int
+            }
+        ],
+        "top_drugs": [...],
+        "top_reactions": [...],
+        "rows": [...]
+    }
+
+The query must aggregate report grain safely and must define which
+fact_report date relationship is used.
+
+----------------------------------------------------------------------
+services/signal_service.py
+----------------------------------------------------------------------
+
+    get_signal(
+        drug_key: int,
+        reaction_key: int,
+        *,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        country_code: str | None = None,
+        serious_only: bool | None = None,
+        min_pair_count: int = 3,
+        prr_threshold: float = 2.0,
+        chi_square_threshold: float = 4.0
+    ) -> dict[str, object]
+
+Suggested return:
+
+    {
+        "filters": {...},
+        "counts": {
+            "total_reports": int,
+            "pair_count": int,
+            "drug_total": int,
+            "reaction_total": int
+        },
+        "metrics": {
+            "a": int,
+            "b": int,
+            "c": int,
+            "d": int,
+            "prr": float | None,
+            "prr_lower_95": float | None,
+            "prr_upper_95": float | None,
+            "ror": float | None,
+            "ror_lower_95": float | None,
+            "ror_upper_95": float | None,
+            "chi_square": float | None
+        },
+        "screening": {
+            "passes": bool,
+            "min_pair_count": int,
+            "prr_threshold": float,
+            "chi_square_threshold": float
+        }
+    }
+
+Date, country, and seriousness filters must be applied inside all
+contingency-table aggregation steps, not after the totals are calculated.
+
+----------------------------------------------------------------------
+services/forecast_service.py
+----------------------------------------------------------------------
+
+    forecast_reporting_volume(
+        *,
+        series: Literal["total_reports", "serious_reports"],
+        method: Literal[
+            "seasonal_naive", "ets", "sarima", "best"
+        ] = "best",
+        horizon_months: int = 12,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        filters: Mapping[str, object] | None = None
+    ) -> dict[str, object]
+
+Suggested return:
+
+    {
+        "series": "...",
+        "method": "...",
+        "training_period": {"start": "...", "end": "..."},
+        "historical": [
+            {"year_month": "...", "count": int}
+        ],
+        "backtest": {
+            "folds": int,
+            "mae": float,
+            "rmse": float,
+            "smape": float
+        },
+        "forecast": [
+            {
+                "year_month": "...",
+                "predicted_count": float,
+                "lower_95": float,
+                "upper_95": float
+            }
+        ],
+        "warnings": [...]
+    }
+
+The service should reject filtered series that do not meet the selected
+model's minimum observation requirement.
+
+----------------------------------------------------------------------
+services/classifier_service.py
+----------------------------------------------------------------------
+
+    load_classifier(
+        model_path: Path = DEFAULT_MODEL_PATH
+    ) -> object
+
+    predict_seriousness(
+        features: Mapping[str, object] | pandas.DataFrame,
+        *,
+        model: object | None = None
+    ) -> dict[str, object]
+
+Suggested return:
+
+    {
+        "target": "fact_report.is_serious",
+        "predicted_label": int,
+        "predicted_label_name": "serious" | "not_serious",
+        "serious_probability": float,
+        "feature_columns": [...],
+        "warnings": [...]
+    }
+
+The model should be cached after loading. The service must not call
+ml_classifier.run() or fit a model during a prediction request.
+
+----------------------------------------------------------------------
+services/validation.py
+----------------------------------------------------------------------
+
+    validate_date_range(
+        start_date: date | None,
+        end_date: date | None
+    ) -> None
+
+    validate_limit(limit: int, maximum: int = 1000) -> None
+
+    validate_forecast_horizon(horizon_months: int) -> None
+
+    validate_signal_thresholds(
+        min_pair_count: int,
+        prr_threshold: float,
+        chi_square_threshold: float
+    ) -> None
+
+    validate_classifier_features(
+        features: Mapping[str, object] | pandas.DataFrame
+    ) -> None
+
+======================================================================
+D. KEY RISKS THAT MUST BE RESOLVED BEFORE CODING
+======================================================================
+
+1. Date semantics:
+
+The schema has date_key, receipt_date_key, receive_date_key, and
+transmission_date_key. The transform code currently maps date_key from
+receivedate, receipt_date_key from receiptdate, and passes the receivedate
+key again for receive_date_key. The application must choose and document
+one date meaning.
+
+2. Report-count duplication:
+
+Raw fact_drug/fact_reaction joins multiply rows. All application queries
+must use distinct report IDs or pre-aggregated report-grain subqueries.
+
+3. Signal date filtering:
+
+The existing signal view totals are global. Date/country/seriousness
+filtering requires a new aggregation query that applies the same filter to
+all four contingency quantities.
+
+4. Classifier input design:
+
+The model needs 11 features, including three child-fact counts. Decide
+whether users predict existing reports or hypothetical new reports.
+
+5. Model security:
+
+The saved model uses pickle-backed joblib. Only trusted local artifacts
+must be loaded.
+
+6. SQL Server deployment:
+
+The current connection method is local Windows-oriented SQL Server. A
+public application needs private network access, server-side secrets, a
+least-privilege login, and likely a hosted database strategy.
+
+7. Query abuse:
+
+External users can trigger large scans, full downloads, repeated SARIMA
+fits, and broad signal analyses unless limits, pagination, caching, and
+timeouts are implemented.
+
+8. Empty and sparse data:
+
+Filtered groups may have zero reports, zero cells, or too few monthly
+observations. The UI needs explicit empty-state and unavailable-metric
+handling.
+
+9. Statistical interpretation:
+
+PRR/ROR are disproportionality measures, not incidence or causality.
+The classifier predicts recorded seriousness labels, not clinical harm.
+Forecast intervals are approximate residual-based intervals.
+
+10. Documentation drift:
+
+README.md still contains statements that ML and validated forecasting are
+not implemented, although current source files and artifacts include them.
+
+11. No application-level tests:
+
+The current tests do not verify SQL joins, persisted model loading, or
+web request behavior.
+
+======================================================================
+E. STEP-BY-STEP IMPLEMENTATION PLAN
+======================================================================
+
+The requested implementation order starts with reporting analytics.
+
+STEP 1: Confirm application decisions
+
+- Choose the reporting date definition.
+- Decide whether country means primary-source or occurrence country.
+- Decide whether users see aggregate data only or individual reports.
+- Decide whether classifier input is an existing report or a new form.
+- Set maximum date ranges, result limits, and forecast horizons.
+
+STEP 2: Build the reporting analytics service first
+
+- Add a database helper with parameterized queries and timeouts.
+- Add report-grain filtered summary query.
+- Add monthly trend query.
+- Add top-drug and top-reaction queries.
+- Add filters for date, drug, reaction, country, and seriousness.
+- Use DISTINCT report_key or report-grain subqueries.
+- Add unit tests using mocked database responses or a test query fixture.
+
+STEP 3: Add the Streamlit reporting page
+
+- Add date controls.
+- Add drug/reaction/country selectors.
+- Add serious-only control.
+- Display total reports, serious reports, and serious percentage.
+- Display monthly chart.
+- Display top drugs and reactions.
+- Add CSV download.
+- Add clear empty-state messages.
+
+STEP 4: Add the signal service
+
+- Add validated drug/reaction selection.
+- Create a date-aware and filter-aware pair-count query.
+- Reuse calculate_signal().
+- Make thresholds explicit inputs.
+- Display counts, PRR, ROR, confidence intervals, chi-square, and
+  screening result.
+- Add tests for zero cells, invalid tables, and filtered counts.
+
+STEP 5: Add the forecasting service
+
+- Query a filtered complete monthly series.
+- Validate minimum observations for the selected method.
+- Reuse _seasonal_naive(), _ets(), _sarima(), _metrics(), and
+  _backtest().
+- Support method selection and horizon.
+- Display historical series, forecast, intervals, and backtest metrics.
+- Add tests for short-series rejection and output shape.
+
+STEP 6: Add the classifier serving service
+
+- Load the persisted joblib pipeline once.
+- Validate exact required feature names.
+- Decide the new-report or existing-report workflow.
+- Return label and serious probability.
+- Do not retrain during requests.
+- Add model-loading and prediction tests.
+
+STEP 7: Add application-level protections
+
+- Query timeouts.
+- Maximum row limits.
+- Pagination.
+- Forecast horizon limit.
+- Signal candidate limit.
+- Caching.
+- Safe error messages.
+- Server-side credentials.
+
+STEP 8: Add deployment configuration
+
+- Add Streamlit dependency declaration.
+- Add deployment-specific environment configuration.
+- Document SQL Server network requirements.
+- Add a health check.
+- Add logging.
+- Add authentication if the app is public.
+
+STEP 9: Update documentation
+
+- Correct stale README status text.
+- Document Streamlit startup command.
+- Document supported filters and limitations.
+- Document classifier input semantics.
+- Document trusted model-artifact handling.
+
+======================================================================
+F. UNCERTAINTIES NOT RESOLVED FROM SOURCE CODE
+======================================================================
+
+The source code alone does not establish:
+
+1. Whether fact_report.date_key is intended to represent event date,
+   receivedate, receiptdate, or another reporting date in the product.
+
+2. Whether the transform assignment of the receive_date_key position to
+   the receivedate key is intentional or a naming/mapping defect.
+
+3. Whether users should enter hypothetical reports or select existing
+   reports for classification.
+
+4. Whether external users are allowed to view report-level records,
+   company numbers, manufacturer details, or only aggregates.
+
+5. Whether the local SQL Server instance can be reached by a hosted
+   application.
+
+6. Whether the current 12,000-report sample is sufficient for the
+   intended external audience.
+
+7. Whether signal thresholds should remain fixed or be user-configurable.
+
+8. Whether forecasting should support filters by drug, reaction, country,
+   or seriousness beyond total and serious report series.
+
+9. Whether the persisted model is the official production model or only a
+   Stage 8 experiment artifact.
+
+10. Whether users need authentication, user accounts, audit logs, or
+    usage limits.
+
+11. Whether the application should allow CSV downloads containing
+    potentially sensitive or identifying fields.
+
+12. Whether Power BI remains part of the end-user product or only an
+    analyst-facing reporting output.
+
+13. Whether a future deployment target supports Windows Authentication or
+    requires SQL authentication/service credentials.
+
+14. Whether a model monitoring and retraining workflow is required.
+
+======================================================================
+FINAL AUDIT CONCLUSION
+======================================================================
+
+The project has strong reusable analytical foundations, especially:
+
+- SQL Server star-schema storage.
+- Tested PRR/ROR calculation logic.
+- Forecast model functions and backtesting.
+- A persisted and preprocessing-complete classifier pipeline.
+
+The missing layer is not the core analytics. It is the application
+boundary:
+
+- Safe parameterized queries.
+- Report-grain aggregation.
+- Interactive filtering.
+- Model loading and prediction wrappers.
+- Input validation.
+- Limits, caching, and deployment controls.
+
+The smallest maintainable implementation is:
+
+1. Build reporting analytics services and tests first.
+2. Add a Streamlit reporting page.
+3. Add signal, forecasting, and classifier pages.
+4. Harden deployment only after local workflows are verified.
+
+END OF REPORT

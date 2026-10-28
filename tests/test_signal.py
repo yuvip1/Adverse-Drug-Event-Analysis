@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.signal import calculate_signal
+from src.signal_analysis import calculate_signal
 
 
 def test_hand_calculated_two_by_two_signal():
