@@ -34,71 +34,93 @@ def _inject_styles() -> None:
         """
         <style>
         :root {
-            --faers-ink: #17324d;
-            --faers-muted: #60758a;
-            --faers-blue: #1d5f91;
-            --faers-border: #d7e2eb;
-            --faers-surface: #ffffff;
+            --faers-ink: #0F172A;
+            --faers-muted: #64748B;
+            --faers-primary: #0F766E;
+            --faers-primary-dark: #0D5F59;
+            --faers-border: #E2E8F0;
+            --faers-surface: #FFFFFF;
+            --faers-background: #F8FAFC;
+            --faers-danger: #DC2626;
+            --faers-danger-dark: #B91C1C;
         }
         .stApp {
-            background: #f5f8fb;
+            background: var(--faers-background);
         }
         [data-testid="stHeader"] {
-            background: rgba(245, 248, 251, 0.92);
+            background: rgba(248, 250, 252, 0.92);
+            border-bottom: 1px solid var(--faers-border);
         }
         [data-testid="stSidebar"] {
-            background: #eef4f8;
+            background: var(--faers-surface);
             border-right: 1px solid var(--faers-border);
         }
         [data-testid="stSidebar"] h2,
         [data-testid="stSidebar"] h3 {
             color: var(--faers-ink);
         }
-        .faers-eyebrow {
-            color: var(--faers-blue);
-            font-size: 0.72rem;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            margin-bottom: 0.35rem;
-        }
         .faers-title {
             color: var(--faers-ink);
-            font-size: clamp(2rem, 4vw, 3.2rem);
-            font-weight: 760;
-            letter-spacing: -0.045em;
-            line-height: 1.05;
-            margin: 0;
+            font-size: clamp(1.6rem, 3vw, 2.1rem);
+            font-weight: 700;
+            letter-spacing: -0.04em;
+            line-height: 1.15;
+            margin: 0 0 0.25rem;
         }
         .faers-subtitle {
             color: var(--faers-muted);
-            font-size: 0.98rem;
-            line-height: 1.55;
-            max-width: 760px;
-            margin: 0.65rem 0 1.4rem;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            max-width: 720px;
+            margin: 0 0 1.5rem;
         }
-        [data-testid="stMetric"] {
-            background: var(--faers-surface);
+        .metric-band {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .metric {
             border: 1px solid var(--faers-border);
-            border-radius: 0.65rem;
-            padding: 1rem 1.1rem;
+            border-radius: 0.5rem;
+            background: var(--faers-surface);
+            padding: 1rem 1.25rem;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
         }
-        [data-testid="stMetricLabel"] {
+        .metric-label {
             color: var(--faers-muted);
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.35rem;
         }
-        [data-testid="stMetricValue"] {
+        .metric-value {
             color: var(--faers-ink);
+            font-size: 2rem;
+            font-weight: 700;
             font-variant-numeric: tabular-nums;
+            line-height: 1.1;
+        }
+        .metric-value.serious {
+            color: var(--faers-danger);
+        }
+        .metric-value.primary {
+            color: var(--faers-primary);
         }
         div.stButton > button[kind="primary"],
         div[data-testid="stFormSubmitButton"] button {
-            background: var(--faers-blue);
-            border-color: var(--faers-blue);
+            background: var(--faers-primary);
+            border-color: var(--faers-primary);
         }
         div.stButton > button[kind="primary"]:hover,
         div[data-testid="stFormSubmitButton"] button:hover {
-            background: #154b73;
-            border-color: #154b73;
+            background: var(--faers-primary-dark);
+            border-color: var(--faers-primary-dark);
+        }
+        ::selection {
+            background: var(--faers-primary);
+            color: white;
         }
         </style>
         """,
@@ -285,13 +307,36 @@ def _validate_date_range(
 
 def _render_results(result: dict[str, Any]) -> None:
     summary = result["summary"]
-    st.subheader("Reporting snapshot")
-    kpi_columns = st.columns(3)
-    kpi_columns[0].metric("Distinct reports", f"{summary['report_count']:,}")
-    kpi_columns[1].metric("Serious reports", f"{summary['serious_count']:,}")
-    kpi_columns[2].metric("Serious-report rate", _format_percentage(summary["serious_pct"]))
 
-    if summary["report_count"] == 0:
+    st.markdown(
+        '<div class="faers-title">Reporting snapshot</div>',
+        unsafe_allow_html=True,
+    )
+
+    report_count = summary["report_count"]
+    serious_count = summary["serious_count"]
+    serious_pct = summary["serious_pct"]
+
+    st.markdown(
+        f"""
+        <div class="metric-band">
+            <div class="metric">
+                <div class="metric-label">Total distinct reports</div>
+                <div class="metric-value primary">{report_count:,}</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Serious-report rate</div>
+                <div class="metric-value serious">{_format_percentage(serious_pct)}</div>
+                <div class="metric-label" style="margin-top:0.25rem;">
+                    {serious_count:,} serious of {report_count:,}
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if report_count == 0:
         st.info("No reports matched the selected filters.")
         return
 
@@ -304,7 +349,7 @@ def _render_results(result: dict[str, Any]) -> None:
             + monthly["month"].astype(str).str.zfill(2)
         )
         monthly_chart = monthly.set_index("year_month")[["report_count", "serious_count"]]
-        st.subheader("Monthly reporting trend")
+        st.markdown("### Monthly reporting trend")
         st.line_chart(monthly_chart)
         st.download_button(
             "Download monthly aggregates",
@@ -316,7 +361,7 @@ def _render_results(result: dict[str, Any]) -> None:
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Top suspect drugs")
+        st.markdown("### Top suspect drugs")
         drug_rows = result["top_drugs"]
         if not drug_rows:
             st.info("No suspect-drug aggregates are available.")
@@ -333,7 +378,7 @@ def _render_results(result: dict[str, Any]) -> None:
             )
 
     with right:
-        st.subheader("Top reactions")
+        st.markdown("### Top reactions")
         reaction_rows = result["top_reactions"]
         if not reaction_rows:
             st.info("No reaction aggregates are available.")
@@ -766,11 +811,15 @@ def main() -> None:
             limit,
             submitted,
         ) = _render_reporting_sidebar()
-        _render_page_header(
-            "FAERS · reporting intelligence",
-            "Reporting overview",
-            "A filtered view of report volume, seriousness, suspect drugs, and "
-            "reactions. All outputs are aggregate-only.",
+        st.markdown(
+            '<div class="faers-title">Reporting overview</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<p class="faers-subtitle">A filtered view of report volume, '
+            f'seriousness, suspect drugs, and reactions. All outputs are '
+            f'aggregate-only.</p>',
+            unsafe_allow_html=True,
         )
         if not submitted:
             st.info(
